@@ -1,4 +1,3 @@
-#!/usr/bin/env groovy
 
 @Grapes([
         @Grab("org.oxerr:okcoin-client-rest:3.0.0"),
@@ -69,7 +68,7 @@ class Trading {
         def bidPrice
         def askPrice
         def updateOrderBook = {
-            orderBook = market.getOrderBook(CurrencyPair.BTC_CNY, 2)
+            orderBook = market.getOrderBook(CurrencyPair.BTC_CNY, 3)
 
             // 计算提单价格
             bidPrice = orderBook.bids[0].limitPrice * 0.618 + orderBook.asks[0].limitPrice * 0.382 + 0.01
@@ -78,9 +77,9 @@ class Trading {
             // 更新时间价格序列
             //  本次tick价格 = (买1+卖1)*0.35 + (买2+卖2) * 0.10 + (买3+卖3)*0.05
             prices = prices[1 .. -1] + [(
-                    (orderBook.bids[0].limitPrice + orderBook.asks[0].limitPrice) / 2 + 0.7 +
-                    (orderBook.bids[1].limitPrice + orderBook.asks[1].limitPrice) / 2 + 0.2 +
-                    (orderBook.bids[2].limitPrice + orderBook.asks[2].limitPrice) / 2 + 0.1)]
+                                                (orderBook.bids[0].limitPrice + orderBook.asks[0].limitPrice) / 2 * 0.7 +
+                                                        (orderBook.bids[1].limitPrice + orderBook.asks[1].limitPrice) / 2 * 0.2 +
+                                                        (orderBook.bids[2].limitPrice + orderBook.asks[2].limitPrice) / 2 * 0.1)]
         }
         updateOrderBook()
 
@@ -100,28 +99,25 @@ class Trading {
                     // 这里有一个仓位平衡的辅助策略
                     //  仓位平衡策略是在仓位偏离50%时，通过不断提交小单来使仓位回归50%的策略，
                     //  这个辅助策略可以有效减少趋势策略中趋势反转+大滑点带来的大幅回撤
-                    def orders = (
-                        p < 0.48 ? {
-                            cny -= 300.0
-                            trader2.batchTrade("btc_cny", Type.BUY, [
-                                new OrderData(orderBook.bids[0].limitPrice + 0.00, 0.010G, Type.BUY),
-                                new OrderData(orderBook.bids[0].limitPrice + 0.01, 0.010G, Type.BUY),
-                                new OrderData(orderBook.bids[0].limitPrice + 0.02, 0.010G, Type.BUY),
-                            ] as OrderData[])
-                        }() :
-                        p > 0.52 ? {
-                            btc -= 0.030
-                            trader2.batchTrade("btc_cny", Type.SELL, [
-                                new OrderData(orderBook.asks[0].limitPrice - 0.00, 0.010G, Type.SELL),
-                                new OrderData(orderBook.asks[0].limitPrice - 0.01, 0.010G, Type.SELL),
-                                new OrderData(orderBook.asks[0].limitPrice - 0.02, 0.010G, Type.SELL),
-                            ] as OrderData[])
-                        }() :
-                        null)
-                    userInfo = account.userInfo
-                    btc = userInfo.info.funds.free.btc
-                    cny = userInfo.info.funds.free.cny
-                    p = btc * prices[-1] / (btc * prices[-1] + cny)
+//                    def orders = (
+//                            p < 0.48 ? {
+//                                cny -= 300.0
+//                                trader2.batchTrade("btc_cny", Type.BUY, [
+//                                        new OrderData(orderBook.bids[0].limitPrice + 0.00, 0.010G, Type.BUY),
+//                                        new OrderData(orderBook.bids[0].limitPrice + 0.01, 0.010G, Type.BUY),
+//                                        new OrderData(orderBook.bids[0].limitPrice + 0.02, 0.010G, Type.BUY),
+//                                ] as OrderData[])
+//                            }() :
+//                                    p > 0.52 ? {
+//                                        btc -= 0.030
+//                                        trader2.batchTrade("btc_cny", Type.SELL, [
+//                                                new OrderData(orderBook.asks[0].limitPrice - 0.00, 0.010G, Type.SELL),
+//                                                new OrderData(orderBook.asks[0].limitPrice - 0.01, 0.010G, Type.SELL),
+//                                                new OrderData(orderBook.asks[0].limitPrice - 0.02, 0.010G, Type.SELL),
+//                                        ] as OrderData[])
+//                                    }() :
+//                                            null)
+
 
                     if (orders != null) {
                         sleep 400
@@ -141,18 +137,22 @@ class Trading {
             while (true) {
                 ignoreException {
                     trader2.openOrders.openOrders
-                        .grep {it.timestamp.time - System.currentTimeMillis() < -10000}  // orders before 10s
-                        .each {
-                            trader2.cancelOrder(it.id)
-                        }
+                            .grep {it.timestamp.time - System.currentTimeMillis() < -10000}  // orders before 10s
+                            .each {
+                        trader2.cancelOrder(it.id)
+                    }
                 }
                 sleep 60000
             }
         }
-
+        userInfo = account.userInfo
+        btc = userInfo.info.funds.free.btc
+        cny = userInfo.info.funds.free.cny
+        p = btc * prices[-1] / (btc * prices[-1] + cny)
         // main loop
         def ts1 = 0
         def ts0 = 0
+
         for (def numTick = 0; ; numTick++) {
             while (System.currentTimeMillis() - ts0 < cfg.tick.interval) {
                 sleep 5
@@ -181,16 +181,16 @@ class Trading {
 
                 // 趋势策略，价格出现方向上的突破时开始交易
                 if (numTick > 2 && (
-                            prices[-1] - prices[-6 .. -2].max() > +burstPrice ||
-                            prices[-1] - prices[-6 .. -3].max() > +burstPrice && prices[-1] > prices[-2]
-                        )) {
+                        prices[-1] - prices[-6 .. -2].max() > +burstPrice ||
+                                prices[-1] - prices[-6 .. -3].max() > +burstPrice && prices[-1] > prices[-2]
+                )) {
                     bull = true
                     tradeAmount = cny / bidPrice * 0.99
                 }
                 if (numTick > 2 && (
-                            prices[-1] - prices[-6 .. -2].min() < -burstPrice ||
-                            prices[-1] - prices[-6 .. -3].min() < -burstPrice && prices[-1] < prices[-2]
-                        )) {
+                        prices[-1] - prices[-6 .. -2].min() < -burstPrice ||
+                                prices[-1] - prices[-6 .. -3].min() < -burstPrice && prices[-1] < prices[-2]
+                )) {
                     bear = true
                     tradeAmount = btc
                 }
@@ -216,42 +216,41 @@ class Trading {
                     def tradePrice = bull ? bidPrice : askPrice
                     trading = true
 
-                    while (tradeAmount >= 0.1) {
-                        def orderId = bull  // 提单
-                            ? trader1.trade("btc_cny", Type.BUY,  bidPrice, tradeAmount).orderId
-                            : trader1.trade("btc_cny", Type.SELL, askPrice, tradeAmount).orderId
-
-                        ignoreException {  // 等待200ms后取消挂单
-                            sleep 200
-                            trader1.cancelOrder("btc_cny", orderId)
-                        }
-
-                        // 获取订单状态
-                        def order
-                        while (order == null || order.status == Status.CANCEL_REQUEST_IN_PROCESS) {
-                            order = trader1.getOrder("btc_cny", orderId).orders[0]
-                        }
-                        logger.warn("TRADING: {} price: {}, amount: {}, dealAmount: {}",
-                                bull ? '++':'--',
-                                String.format("%.2f", bull ? bidPrice : askPrice),
-                                String.format("%.3f", tradeAmount),
-                                String.format("%.3f", order.dealAmount))
-                        tradeAmount -= order.dealAmount
-                        tradeAmount -= 0.01
-                        tradeAmount *= 0.98  // 每轮循环都少量削减力度
-
-                        if (order.status == Status.CANCELLED) {
-                            updateOrderBook()  // 更新盘口，更新后的价格高于提单价格也需要削减力度
-                            while (bull && bidPrice - tradePrice > +0.1) {
-                                tradeAmount *= 0.99
-                                tradePrice += 0.1
-                            }
-                            while (bear && askPrice - tradePrice < -0.1) {
-                                tradeAmount *= 0.99
-                                tradePrice -= 0.1
-                            }
-                        }
-                    }
+//                    while (tradeAmount >= 0.1) {
+//                        def orderId = bull? trader1.trade("btc_cny", Type.BUY,  bidPrice, tradeAmount).orderId
+//                        : trader1.trade("btc_cny", Type.SELL, askPrice, tradeAmount).orderId
+//
+//                        ignoreException {  // 等待200ms后取消挂单
+//                            sleep 200
+//                            trader1.cancelOrder("btc_cny", orderId)
+//                        }
+//
+//                        // 获取订单状态
+//                        def order
+//                        while (order == null || order.status == Status.CANCEL_REQUEST_IN_PROCESS) {
+//                            order = trader1.getOrder("btc_cny", orderId).orders[0]
+//                        }
+//                        logger.warn("TRADING: {} price: {}, amount: {}, dealAmount: {}",
+//                                bull ? '++':'--',
+//                                String.format("%.2f", bull ? bidPrice : askPrice),
+//                                String.format("%.3f", tradeAmount),
+//                                String.format("%.3f", order.dealAmount))
+//                        tradeAmount -= order.dealAmount
+//                        tradeAmount -= 0.01
+//                        tradeAmount *= 0.98  // 每轮循环都少量削减力度
+//
+//                        if (order.status == Status.CANCELLED) {
+//                            updateOrderBook()  // 更新盘口，更新后的价格高于提单价格也需要削减力度
+//                            while (bull && bidPrice - tradePrice > +0.1) {
+//                                tradeAmount *= 0.99
+//                                tradePrice += 0.1
+//                            }
+//                            while (bear && askPrice - tradePrice < -0.1) {
+//                                tradeAmount *= 0.99
+//                                tradePrice -= 0.1
+//                            }
+//                        }
+//                    }
                     numTick = 0
                 }
             } catch (InterruptedException e) {
@@ -275,6 +274,5 @@ _prop.setProperty("log4j.appender.trading.layout", "org.apache.log4j.PatternLayo
 _prop.setProperty("log4j.appender.trading.layout.ConversionPattern", "[%d{yyyy-MM-dd HH:mm:ss}] %p %m %n")
 PropertyConfigurator.configure(_prop)
 
-// start trading
-_trading = new Trading(new ConfigSlurper().parse(new File(System.getProperty("cfg")).text))
+_trading = new Trading(new ConfigSlurper().parse(new File(("C:\\Users\\wuqianming\\trade\\example.cfg")).text))
 _trading.start()
